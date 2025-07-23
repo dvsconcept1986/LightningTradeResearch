@@ -16,6 +16,7 @@
 #include <chrono>
 #include "MockDataGenerator.h"
 #include "ChartManager.h"
+#include "WebSocketClient.h"
 
 class LightningTradeMainWindow : public QMainWindow {
     Q_OBJECT
@@ -34,6 +35,11 @@ private slots:
     void onUpdateIntervalChanged(int interval);
     void onMaxDataPointsChanged(int points);
     void onThemeChanged(bool darkTheme);
+    void handleWebSocketMessage(const QString& message);
+    void startWebSocket();
+    void onWebSocketConnected();
+    void onWebSocketDisconnected();
+    void onWebSocketError(const QString& errorString);
 
 private:
     // Core components
@@ -78,6 +84,8 @@ private:
     int totalUpdates;
     double totalUpdateTime; // in microseconds
 
+
+    WebSocketClient* websocketClient;
     // Private methods
     void setupUI();
     void setupControlPanel();

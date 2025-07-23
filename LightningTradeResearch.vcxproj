@@ -149,12 +149,15 @@
     <ClCompile Include="MockDataGenerator.cpp" />
     <ClCompile Include="moc_LightningTradeMainWindow.cpp" />
     <ClCompile Include="moc_MockDataGenerator.cpp" />
+    <ClCompile Include="moc_WebSocketClient.cpp" />
+    <ClCompile Include="WebSocketClient.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ChartManager.h" />
     <ClInclude Include="LightningTradeMainWindow.h" />
     <ClInclude Include="MainWindow.h" />
     <ClInclude Include="MockDataGenerator.h" />
+    <ClInclude Include="WebSocketClient.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

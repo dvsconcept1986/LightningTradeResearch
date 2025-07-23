@@ -7,6 +7,9 @@
 #include <QHBoxLayout>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QUrl>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QTimer>
 #include <chrono>
 
@@ -173,6 +176,15 @@ void LightningTradeMainWindow::initializeComponents() {
     generator = new MockDataGenerator(this);
     chartManager = new ChartManager(this);
     realTimeTimer = new QTimer(this);
+	
+    websocketClient = new WebSocketClient(this);
+
+    connect(websocketClient, &WebSocketClient::connected, this, &LightningTradeMainWindow::onWebSocketConnected);
+    connect(websocketClient, &WebSocketClient::disconnected, this, &LightningTradeMainWindow::onWebSocketDisconnected);
+    connect(websocketClient, &WebSocketClient::messageReceived, this, &LightningTradeMainWindow::handleWebSocketMessage);
+    connect(websocketClient, &WebSocketClient::errorOccurred, this, &LightningTradeMainWindow::onWebSocketError);
+
+
 
     // Add chart view to chart group
     QVBoxLayout* chartLayout = qobject_cast<QVBoxLayout*>(chartGroup->layout());
@@ -297,6 +309,54 @@ void LightningTradeMainWindow::onMaxDataPointsChanged(int points) {
 void LightningTradeMainWindow::onThemeChanged(bool darkTheme) {
     chartManager->setDarkTheme(darkTheme);
     addLogMessage(QString("Theme changed to %1").arg(darkTheme ? "Dark" : "Light"));
+}
+
+void LightningTradeMainWindow::handleWebSocketMessage(const QString& message){
+    QJsonParseError parseError;
+    QJsonDocument doc = QJsonDocument::fromJson(message.toUtf8(), &parseError);
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+        addLogMessage("Failed to parse WebSocket JSON message");
+        return;
+    }
+
+    QJsonObject obj = doc.object();
+
+    QString symbol = obj.value("s").toString();
+    double price = obj.value("p").toString().toDouble();
+    double quantity = obj.value("q").toString().toDouble();
+    qint64 tradeTime = obj.value("T").toVariant().toLongLong();
+
+    if (symbol.isEmpty() || price == 0.0) {
+        addLogMessage("Invalid trade data received");
+        return;
+    }
+
+    MarketTick tick(symbol.toStdString(), price, static_cast<int>(quantity), tradeTime, price, price, price, price, price);
+
+    chartManager->addDataPoint(tick.price, tick.timestamp);
+    updateDataDisplay(tick);
+
+    addLogMessage(QString("Trade: %1 Price: %2 Quantity: %3").arg(symbol).arg(price).arg(quantity));
+}
+
+void LightningTradeMainWindow::onWebSocketDisconnected(){
+    addLogMessage("WebSocket disconnected.");
+    updateStatusBar("WebSocket connection closed.");
+}
+
+void LightningTradeMainWindow::onWebSocketError(const QString& errorString) {
+    qWarning() << "WebSocket error received in MainWindow:" << errorString;
+}
+
+void LightningTradeMainWindow::startWebSocket(){
+    QUrl url("wss://stream.binance.com:9443/ws/btcusdt@trade");
+    websocketClient->connectToServer(url);
+    addLogMessage("Connecting to Binance WebSocket via custom client...");
+}
+
+void LightningTradeMainWindow::onWebSocketConnected(){
+    addLogMessage("WebSocket connected.");
+    updateStatusBar("WebSocket connection established.");
 }
 
 void LightningTradeMainWindow::updateDataDisplay(const MarketTick& tick) {
