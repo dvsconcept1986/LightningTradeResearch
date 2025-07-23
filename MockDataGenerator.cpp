@@ -1,193 +1,173 @@
-#include <iostream>
-#include <sstream>
-#include <iomanip>
-#include <algorithm>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
+#include <QDebug>
 #include "MockDataGenerator.h"
+#include "LightningTradeMainWindow.h"
+#include <chrono>
+#include <cmath>
+#include <thread>
 
 MockDataGenerator::MockDataGenerator()
-    : randomGenerator(static_cast<unsigned int>(std::chrono::high_resolution_clock::now().time_since_epoch().count())),
-    priceMovement(-0.02, 0.02),  // ±2% price movement
-    volumeRange(100, 10000),     // Volume between 100-10000
-    spreadRange(0.001, 0.01)     // Bid-ask spread 0.1%-1%
+    : gen(rd()), priceDist(-1.0, 1.0), volumeDist(100, 10000), spreadDist(0.01, 0.05),
+    basePrice(50000.0), lastPrice(50000.0), currentSymbol("BTCUSD") {
+}
+
+MockDataGenerator::MockDataGenerator(const MockDataGenerator& other)
+    : QObject(),
+    gen(other.gen),
+    priceDist(other.priceDist),
+    volumeDist(other.volumeDist),
+    spreadDist(other.spreadDist),
+    basePrice(other.basePrice),
+    lastPrice(other.lastPrice),
+    currentSymbol(other.currentSymbol)
 {
-    // Initialize with some common trading pairs
-    addSymbol("BTCUSD", 45000.0);
-    addSymbol("ETHUSD", 3000.0);
-    addSymbol("AAPL", 150.0);
-    addSymbol("MSFT", 300.0);
-    addSymbol("GOOGL", 2500.0);
 }
 
-void MockDataGenerator::addSymbol(const std::string& symbol, double initialPrice) {
-    symbols.push_back(symbol);
-    currentPrices.push_back(initialPrice);
-    dailyOpen.push_back(initialPrice);
-    dailyHigh.push_back(initialPrice);
-    dailyLow.push_back(initialPrice);
+MockDataGenerator::MockDataGenerator(LightningTradeMainWindow* parent)
+    : QObject(parent),
+    gen(rd()),
+    priceDist(-1.0, 1.0),
+    volumeDist(100, 1000),
+    spreadDist(0.01, 0.2),
+    basePrice(30000.0),
+    lastPrice(30000.0),
+    currentSymbol("BTCUSD")
+{
 }
 
-long long MockDataGenerator::getTimestamp() {
-    auto now = std::chrono::system_clock::now();
-    auto duration = now.time_since_epoch();
-    return std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
+
+
+void MockDataGenerator::updateBasePrice(const std::string& symbol) {
+    if (currentSymbol != symbol) {
+        currentSymbol = symbol;
+
+        // Set realistic base prices for different symbols
+        if (symbol == "BTCUSD") {
+            basePrice = 45000.0 + (std::uniform_real_distribution<double>(0, 10000))(gen);
+        }
+        else if (symbol == "ETHUSD") {
+            basePrice = 2500.0 + (std::uniform_real_distribution<double>(0, 1000))(gen);
+        }
+        else if (symbol == "AAPL") {
+            basePrice = 150.0 + (std::uniform_real_distribution<double>(0, 50))(gen);
+        }
+        else if (symbol == "MSFT") {
+            basePrice = 300.0 + (std::uniform_real_distribution<double>(0, 100))(gen);
+        }
+        else if (symbol == "GOOGL") {
+            basePrice = 2500.0 + (std::uniform_real_distribution<double>(0, 500))(gen);
+        }
+        else {
+            basePrice = 100.0 + (std::uniform_real_distribution<double>(0, 900))(gen);
+        }
+
+        lastPrice = basePrice;
+    }
 }
 
-double MockDataGenerator::generatePriceMovement(double currentPrice, double volatility) {
-    double movement = priceMovement(randomGenerator) * volatility;
-    return currentPrice * (1.0 + movement);
-}
+double MockDataGenerator::generateRealisticPriceMovement() {
+    // Generate more realistic price movements using a random walk
+    double change = priceDist(gen) * (basePrice * 0.001); // 0.1% max change per tick
 
-int MockDataGenerator::generateVolume() {
-    return volumeRange(randomGenerator);
+    // Add some trend bias (slight upward bias)
+    double trendBias = (std::uniform_real_distribution<double>(-0.1, 0.2))(gen);
+    change += trendBias * (basePrice * 0.0005);
+
+    // Apply the change with some momentum
+    lastPrice += change;
+
+    // Prevent price from going below a reasonable minimum
+    double minPrice = basePrice * 0.8;
+    double maxPrice = basePrice * 1.2;
+    lastPrice = std::max(minPrice, std::min(maxPrice, lastPrice));
+
+    return lastPrice;
 }
 
 MarketTick MockDataGenerator::generateTick(const std::string& symbol) {
-    // Find symbol index
-    auto it = std::find(symbols.begin(), symbols.end(), symbol);
-    if (it == symbols.end()) {
-        throw std::runtime_error("Symbol not found: " + symbol);
-    }
+    updateBasePrice(symbol);
 
-    size_t index = std::distance(symbols.begin(), it);
+    // Generate realistic timestamp
+    auto now = std::chrono::system_clock::now();
+    auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()).count();
 
-    // Generate new price
-    double newPrice = generatePriceMovement(currentPrices[index]);
-    currentPrices[index] = newPrice;
-
-    // Update daily high/low
-    if (newPrice > dailyHigh[index]) {
-        dailyHigh[index] = newPrice;
-    }
-    if (newPrice < dailyLow[index]) {
-        dailyLow[index] = newPrice;
-    }
+    // Generate price with realistic movement
+    double price = generateRealisticPriceMovement();
 
     // Generate bid/ask spread
-    double spread = newPrice * spreadRange(randomGenerator);
-    double bid = newPrice - (spread / 2.0);
-    double ask = newPrice + (spread / 2.0);
+    double spreadPercent = spreadDist(gen);
+    double spreadAmount = price * (spreadPercent / 100.0);
+    double bid = price - (spreadAmount / 2.0);
+    double ask = price + (spreadAmount / 2.0);
 
-    MarketTick tick;
-    tick.symbol = symbol;
-    tick.price = newPrice;
-    tick.volume = generateVolume();
-    tick.timestamp = getTimestamp();
-    tick.bid = bid;
-    tick.ask = ask;
-    tick.high = dailyHigh[index];
-    tick.low = dailyLow[index];
-    tick.open = dailyOpen[index];
+    // Generate volume
+    int volume = volumeDist(gen);
 
-    return tick;
+    // Generate OHLC data (simplified)
+    double high = price + (price * 0.001 * std::uniform_real_distribution<double>(0, 1)(gen));
+    double low = price - (price * 0.001 * std::uniform_real_distribution<double>(0, 1)(gen));
+    double open = price + (price * 0.0005 * priceDist(gen));
+
+    return MarketTick(symbol, price, volume, timestamp, bid, ask, high, low, open);
 }
 
-std::vector<MarketTick> MockDataGenerator::generateBatch(int count) {
+std::vector<MarketTick> MockDataGenerator::generateBatch(int count, const std::string& symbol) {
     std::vector<MarketTick> batch;
     batch.reserve(count);
 
     for (int i = 0; i < count; ++i) {
-        // Randomly select a symbol
-        std::uniform_int_distribution<size_t> symbolSelector(0, symbols.size() - 1);
-        size_t symbolIndex = symbolSelector(randomGenerator);
+        batch.push_back(generateTick(symbol));
 
-        batch.push_back(generateTick(symbols[symbolIndex]));
+        // Add small delay between batch items for realistic timestamps
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
     return batch;
 }
 
-std::string MockDataGenerator::generateTickJSON(const std::string& symbol) {
-    MarketTick tick = generateTick(symbol);
-
-    std::ostringstream json;
-    json << std::fixed << std::setprecision(2);
-    json << "{"
-        << "\"symbol\":\"" << tick.symbol << "\","
-        << "\"price\":" << tick.price << ","
-        << "\"volume\":" << tick.volume << ","
-        << "\"timestamp\":" << tick.timestamp << ","
-        << "\"bid\":" << tick.bid << ","
-        << "\"ask\":" << tick.ask << ","
-        << "\"high\":" << tick.high << ","
-        << "\"low\":" << tick.low << ","
-        << "\"open\":" << tick.open
-        << "}";
-
-    return json.str();
-}
-
-std::string MockDataGenerator::generateBatchJSON(int count) {
-    std::vector<MarketTick> batch = generateBatch(count);
-
-    std::ostringstream json;
-    json << std::fixed << std::setprecision(2);
-    json << "[";
-
-    for (size_t i = 0; i < batch.size(); ++i) {
-        const MarketTick& tick = batch[i];
-        json << "{"
-            << "\"symbol\":\"" << tick.symbol << "\","
-            << "\"price\":" << tick.price << ","
-            << "\"volume\":" << tick.volume << ","
-            << "\"timestamp\":" << tick.timestamp << ","
-            << "\"bid\":" << tick.bid << ","
-            << "\"ask\":" << tick.ask << ","
-            << "\"high\":" << tick.high << ","
-            << "\"low\":" << tick.low << ","
-            << "\"open\":" << tick.open
-            << "}";
-
-        if (i < batch.size() - 1) {
-            json << ",";
-        }
-    }
-
-    json << "]";
-    return json.str();
-}
-
-std::vector<MarketTick> MockDataGenerator::generateHistoricalData(const std::string& symbol, int minutes) {
-    std::vector<MarketTick> history;
-    history.reserve(minutes);
-
-    long long currentTime = getTimestamp();
-    long long startTime = currentTime - (minutes * 60 * 1000); // Go back 'minutes' minutes
-
-    for (int i = 0; i < minutes; ++i) {
-        MarketTick tick = generateTick(symbol);
-        tick.timestamp = startTime + (i * 60 * 1000); // One tick per minute
-        history.push_back(tick);
-    }
-
-    return history;
-}
-
-void MockDataGenerator::printTick(const MarketTick& tick) {
-    std::cout << std::fixed << std::setprecision(2)
-        << "Symbol: " << tick.symbol
-        << " | Price: $" << tick.price
-        << " | Volume: " << tick.volume
-        << " | Bid: $" << tick.bid
-        << " | Ask: $" << tick.ask
-        << " | High: $" << tick.high
-        << " | Low: $" << tick.low
-        << " | Timestamp: " << tick.timestamp << std::endl;
-}
-
-std::vector<std::string> MockDataGenerator::getAvailableSymbols() {
-    return symbols;
-}
-
-double MockDataGenerator::getCurrentPrice(const std::string& symbol) {
-    auto it = std::find(symbols.begin(), symbols.end(), symbol);
-    if (it == symbols.end()) {
-        return 0.0;
-    }
-
-    size_t index = std::distance(symbols.begin(), it);
-    return currentPrices[index];
-}
-
 void MockDataGenerator::setVolatility(double volatility) {
-    priceMovement = std::uniform_real_distribution<double>(-volatility, volatility);
+    // Clamp volatility between 0.0 and 1.0
+    volatility = std::max(0.0, std::min(1.0, volatility));
+
+    // Adjust price distribution based on volatility
+    double range = 2.0 * volatility; // Scale the range
+    priceDist = std::uniform_real_distribution<double>(-range, range);
+}
+
+void MockDataGenerator::reset() {
+    basePrice = 50000.0;
+    lastPrice = basePrice;
+    currentSymbol = "BTCUSD";
+}
+
+void MockDataGenerator::setSymbol(const std::string& symbol) {
+    currentSymbol = symbol;
+    updateBasePrice(symbol);
+}
+
+MarketTick parseMarketTickFromJson(const QString& jsonString){
+    QJsonParseError parseError;
+    QJsonDocument doc = QJsonDocument::fromJson(jsonString.toUtf8(), &parseError);
+
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+        qWarning() << "JSON Parse Error:" << parseError.errorString();
+        return MarketTick(); 
+    }
+
+    QJsonObject obj = doc.object();
+
+    return MarketTick{
+        obj.value("symbol").toString("BTCUSD").toStdString(),
+        obj.value("price").toDouble(0.0),
+        obj.value("volume").toInt(0),
+        obj.value("timestamp").toVariant().toLongLong(),
+        obj.value("bid").toDouble(0.0),
+        obj.value("ask").toDouble(0.0),
+        obj.value("high").toDouble(0.0),
+        obj.value("low").toDouble(0.0),
+        obj.value("open").toDouble(0.0)
+    };
 }

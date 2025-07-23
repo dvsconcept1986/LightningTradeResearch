@@ -143,10 +143,16 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="ChartManager.cpp" />
+    <ClCompile Include="LightningTradeMainWindow.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="MockDataGenerator.cpp" />
+    <ClCompile Include="moc_LightningTradeMainWindow.cpp" />
+    <ClCompile Include="moc_MockDataGenerator.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="ChartManager.h" />
+    <ClInclude Include="LightningTradeMainWindow.h" />
     <ClInclude Include="MainWindow.h" />
     <ClInclude Include="MockDataGenerator.h" />
   </ItemGroup>

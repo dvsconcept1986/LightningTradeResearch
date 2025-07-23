@@ -1,58 +1,86 @@
-#pragma once
-#include <string>
-#include <vector>
+
+
+#ifndef MOCKDATAGENERATOR_H
+#define MOCKDATAGENERATOR_H
+
 #include <random>
-#include <chrono>
+#include <vector>
+#include <string>
+#include <QObject>
+#include <QString>
+
+
+// Forward declarations 
+class LightningTradeMainWindow;
+
 
 struct MarketTick {
     std::string symbol;
     double price;
     int volume;
-    long long timestamp;  // Unix timestamp in milliseconds
+    qint64 timestamp;
     double bid;
     double ask;
     double high;
     double low;
     double open;
+
+    MarketTick()  
+        : symbol(""), price(0.0), volume(0), timestamp(0),
+        bid(0.0), ask(0.0), high(0.0), low(0.0), open(0.0) {
+    }
+
+    MarketTick(const std::string& sym, double p, int v, qint64 ts,
+        double b, double a, double h, double l, double o)
+        : symbol(sym), price(p), volume(v), timestamp(ts),
+        bid(b), ask(a), high(h), low(l), open(o) {
+    }
 };
 
-class MockDataGenerator {
+
+class MockDataGenerator : public QObject { // Inherit from QObject if you need Qt functionality
+    Q_OBJECT 
+
 private:
-    std::mt19937 randomGenerator;
-    std::uniform_real_distribution<double> priceMovement;
-    std::uniform_int_distribution<int> volumeRange;
-    std::uniform_real_distribution<double> spreadRange;
+    std::random_device rd;
+    std::mt19937 gen;
+    std::uniform_real_distribution<double> priceDist;
+    std::uniform_int_distribution<int> volumeDist;
+    std::uniform_real_distribution<double> spreadDist;
 
-    // Current market state
-    std::vector<std::string> symbols;
-    std::vector<double> currentPrices;
-    std::vector<double> dailyOpen;
-    std::vector<double> dailyHigh;
-    std::vector<double> dailyLow;
+    // Base prices for different symbols
+    double basePrice;
+    double lastPrice;
+    std::string currentSymbol;
 
-    long long getTimestamp();
-    double generatePriceMovement(double currentPrice, double volatility = 0.02);
-    int generateVolume();
+    void updateBasePrice(const std::string& symbol);
+    double generateRealisticPriceMovement();
 
 public:
     MockDataGenerator();
+    explicit MockDataGenerator(LightningTradeMainWindow* parent = nullptr);
+    ~MockDataGenerator() = default;
+    MockDataGenerator(const MockDataGenerator& other);
 
-    // Configuration
-    void addSymbol(const std::string& symbol, double initialPrice);
+    // Generate single market tick
+    MarketTick generateTick(const std::string& symbol);
+
+    // Generate batch of ticks
+    std::vector<MarketTick> generateBatch(int count, const std::string& symbol = "BTCUSD");
+
+    // Set price volatility (0.0 to 1.0)
     void setVolatility(double volatility);
 
-    // Data generation
-    MarketTick generateTick(const std::string& symbol);
-    std::vector<MarketTick> generateBatch(int count = 10);
-    std::string generateTickJSON(const std::string& symbol);
-    std::string generateBatchJSON(int count = 10);
+    // Reset generator state
+    void reset();
 
-    // Historical data simulation
-    std::vector<MarketTick> generateHistoricalData(const std::string& symbol,
-        int minutes = 60);
-
-    // Utility functions
-    void printTick(const MarketTick& tick);
-    std::vector<std::string> getAvailableSymbols();
-    double getCurrentPrice(const std::string& symbol);
+    // FIXED: Change parameter type to match your usage
+    void setSymbol(const std::string& symbol); 
+    
 };
+
+
+MarketTick parseMarketTickFromJson(const QString& jsonString);
+
+#endif // MOCKDATAGENERATOR_H
+
