@@ -21,7 +21,7 @@
 #include "WebSocketClient.h"
 
 namespace Ui {
-	class LightningTradeMainWindow;
+    class LightningTradeMainWindow;
 }
 
 class LightningTradeMainWindow : public QMainWindow {
@@ -48,9 +48,8 @@ private slots:
     void onWebSocketError(const QString& errorString);
 
 private:
-    // Core components
+    // Core components - REMOVED duplicate chartManager pointer
     MockDataGenerator* generator;
-    ChartManager* chartManager;
     QTimer* realTimeTimer;
 
     // UI Components
@@ -84,23 +83,21 @@ private:
 
     // Chart Display
     QGroupBox* chartGroup;
+    QStackedWidget* chartStack;
 
-    QMap<QString, std::shared_ptr<ChartManager>> chartManagers;
-    QVBoxLayout* chartLayout;
+    // SINGLE chart manager - no map needed for single main chart
+    std::unique_ptr<ChartManager> mainChartManager;
 
     enum class DataSourceMode {
         MockData,
         LiveFeed
     };
 
-    DataSourceMode currentDataSource = DataSourceMode::MockData; 
+    DataSourceMode currentDataSource = DataSourceMode::MockData;
+    QComboBox* dataSourceSelector;
 
-    QComboBox* dataSourceSelector;  
-
-	QString previousSymbol; // To track symbol changes
+    QString previousSymbol;
     QString currentSymbol;
-    QStackedWidget* chartStack;
-    
 
     // New helper method
     void switchDataSource(DataSourceMode mode);
@@ -110,8 +107,8 @@ private:
     int totalUpdates;
     double totalUpdateTime; // in microseconds
 
-
     WebSocketClient* websocketClient;
+
     // Private methods
     void setupUI();
     void setupControlPanel();
@@ -124,19 +121,34 @@ private:
     void updatePerformanceMetrics(double updateTimeMicros);
     void addLogMessage(const QString& message);
     void updateStatusBar(const QString& message);
-    //void initializeCharts();
-    std::shared_ptr<ChartManager> getChartManagerForSymbol(const QString& symbol);
-	void subscribeToSymbol(const QString& symbol);
-	void unsubscribeFromSymbol(const QString& symbol);
+    void subscribeToSymbol(const QString& symbol);
+    void unsubscribeFromSymbol(const QString& symbol);
     void onDataSourceChanged(DataSourceMode newMode);
 
-	// Helper function to normalize symbol names
+    // Helper functions for symbol mapping
     QString normalizeSymbol(const QString& symbol) {
         QString sym = symbol.toUpper();
         sym.remove('/');
         return sym;
     }
 
+    // Convert UI symbol to Kraken format
+    QString toKrakenSymbol(const QString& uiSymbol) {
+        QString normalized = normalizeSymbol(uiSymbol);
+        if (normalized == "BTCUSD") return "XBT/USD";
+        if (normalized == "ETHUSD") return "ETH/USD";
+        // Add more mappings as needed
+        return normalized;
+    }
+
+    // Convert Kraken symbol to UI format
+    QString fromKrakenSymbol(const QString& krakenSymbol) {
+        QString normalized = normalizeSymbol(krakenSymbol);
+        if (normalized == "XBTUSD") return "BTCUSD";
+        if (normalized == "ETHUSD") return "ETHUSD";
+        // Add more mappings as needed
+        return normalized;
+    }
 };
 
 #endif // LIGHTNINGTRADEMAINWINDOW_H
