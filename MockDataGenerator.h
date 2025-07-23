@@ -15,7 +15,7 @@ class LightningTradeMainWindow;
 
 
 struct MarketTick {
-    std::string symbol;
+    QString symbol;
     double price;
     int volume;
     qint64 timestamp;
@@ -30,7 +30,7 @@ struct MarketTick {
         bid(0.0), ask(0.0), high(0.0), low(0.0), open(0.0) {
     }
 
-    MarketTick(const std::string& sym, double p, int v, qint64 ts,
+    MarketTick(const QString& sym, double p, int v, qint64 ts,
         double b, double a, double h, double l, double o)
         : symbol(sym), price(p), volume(v), timestamp(ts),
         bid(b), ask(a), high(h), low(l), open(o) {
@@ -51,10 +51,15 @@ private:
     // Base prices for different symbols
     double basePrice;
     double lastPrice;
-    std::string currentSymbol;
+    QTimer* timer = nullptr;
+    QString currentSymbol;
 
-    void updateBasePrice(const std::string& symbol);
+    void updateBasePrice(const QString& symbol);
+    void generateMockData();
     double generateRealisticPriceMovement();
+   
+public slots:
+    void start(const QString& symbol);
 
 public:
     MockDataGenerator();
@@ -63,10 +68,10 @@ public:
     MockDataGenerator(const MockDataGenerator& other);
 
     // Generate single market tick
-    MarketTick generateTick(const std::string& symbol);
+    MarketTick generateTick(const QString& symbol);
 
     // Generate batch of ticks
-    std::vector<MarketTick> generateBatch(int count, const std::string& symbol = "BTCUSD");
+    std::vector<MarketTick> generateBatch(int count, const QString& symbol = "BTCUSD");
 
     // Set price volatility (0.0 to 1.0)
     void setVolatility(double volatility);
@@ -75,12 +80,15 @@ public:
     void reset();
 
     // FIXED: Change parameter type to match your usage
-    void setSymbol(const std::string& symbol); 
-    
+    void setSymbol(const QString& symbol); 
+  
+signals:
+    void priceUpdated(const MarketTick& tick);
 };
 
 
 MarketTick parseMarketTickFromJson(const QString& jsonString);
 
 #endif // MOCKDATAGENERATOR_H
+
 

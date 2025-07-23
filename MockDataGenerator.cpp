@@ -7,6 +7,9 @@
 #include <chrono>
 #include <cmath>
 #include <thread>
+#include <random>
+
+Q_DECLARE_METATYPE(MarketTick)
 
 MockDataGenerator::MockDataGenerator()
     : gen(rd()), priceDist(-1.0, 1.0), volumeDist(100, 10000), spreadDist(0.01, 0.05),
@@ -35,11 +38,34 @@ MockDataGenerator::MockDataGenerator(LightningTradeMainWindow* parent)
     lastPrice(30000.0),
     currentSymbol("BTCUSD")
 {
+    timer = new QTimer(this);
+
+    connect(timer, &QTimer::timeout, this, &MockDataGenerator::generateMockData);
+}
+
+void MockDataGenerator::generateMockData() {
+    static std::mt19937 rng(std::random_device{}());
+    std::uniform_real_distribution<double> dist(1000.0, 1100.0);
+    double price = dist(rng);
+    qint64 timestamp = QDateTime::currentMSecsSinceEpoch();
+
+    MarketTick tick;
+    tick.symbol = currentSymbol;  // Assuming this is set somewhere
+    tick.price = price;
+    tick.timestamp = timestamp;
+    tick.volume = 1;              // Mocked values
+    tick.bid = price - 1.0;
+    tick.ask = price + 1.0;
+    tick.high = price + 5.0;
+    tick.low = price - 5.0;
+    tick.open = price - 2.0;
+
+    emit priceUpdated(tick);
 }
 
 
 
-void MockDataGenerator::updateBasePrice(const std::string& symbol) {
+void MockDataGenerator::updateBasePrice(const QString& symbol) {
     if (currentSymbol != symbol) {
         currentSymbol = symbol;
 
@@ -86,7 +112,7 @@ double MockDataGenerator::generateRealisticPriceMovement() {
     return lastPrice;
 }
 
-MarketTick MockDataGenerator::generateTick(const std::string& symbol) {
+MarketTick MockDataGenerator::generateTick(const QString& symbol) {
     updateBasePrice(symbol);
 
     // Generate realistic timestamp
@@ -114,7 +140,7 @@ MarketTick MockDataGenerator::generateTick(const std::string& symbol) {
     return MarketTick(symbol, price, volume, timestamp, bid, ask, high, low, open);
 }
 
-std::vector<MarketTick> MockDataGenerator::generateBatch(int count, const std::string& symbol) {
+std::vector<MarketTick> MockDataGenerator::generateBatch(int count, const QString& symbol) {
     std::vector<MarketTick> batch;
     batch.reserve(count);
 
@@ -143,7 +169,7 @@ void MockDataGenerator::reset() {
     currentSymbol = "BTCUSD";
 }
 
-void MockDataGenerator::setSymbol(const std::string& symbol) {
+void MockDataGenerator::setSymbol(const QString& symbol) {
     currentSymbol = symbol;
     updateBasePrice(symbol);
 }
@@ -160,7 +186,7 @@ MarketTick parseMarketTickFromJson(const QString& jsonString){
     QJsonObject obj = doc.object();
 
     return MarketTick{
-        obj.value("symbol").toString("BTCUSD").toStdString(),
+        obj.value("symbol").toString("BTCUSD"),
         obj.value("price").toDouble(0.0),
         obj.value("volume").toInt(0),
         obj.value("timestamp").toVariant().toLongLong(),
@@ -170,4 +196,10 @@ MarketTick parseMarketTickFromJson(const QString& jsonString){
         obj.value("low").toDouble(0.0),
         obj.value("open").toDouble(0.0)
     };
+}
+
+void MockDataGenerator::start(const QString& symbol) {
+    // Save symbol and start timer or emit test data
+    currentSymbol = symbol;
+    timer->start(1000); // or whatever your logic is
 }

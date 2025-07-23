@@ -13,10 +13,16 @@
 #include <QCheckBox>
 #include <QTextEdit>
 #include <QSplitter>
+#include <QVBoxLayout>
+#include <QStackedWidget>
 #include <chrono>
 #include "MockDataGenerator.h"
 #include "ChartManager.h"
 #include "WebSocketClient.h"
+
+namespace Ui {
+	class LightningTradeMainWindow;
+}
 
 class LightningTradeMainWindow : public QMainWindow {
     Q_OBJECT
@@ -79,6 +85,26 @@ private:
     // Chart Display
     QGroupBox* chartGroup;
 
+    QMap<QString, std::shared_ptr<ChartManager>> chartManagers;
+    QVBoxLayout* chartLayout;
+
+    enum class DataSourceMode {
+        MockData,
+        LiveFeed
+    };
+
+    DataSourceMode currentDataSource = DataSourceMode::MockData; 
+
+    QComboBox* dataSourceSelector;  
+
+	QString previousSymbol; // To track symbol changes
+    QString currentSymbol;
+    QStackedWidget* chartStack;
+    
+
+    // New helper method
+    void switchDataSource(DataSourceMode mode);
+
     // Performance monitoring
     std::chrono::high_resolution_clock::time_point lastUpdateTime;
     int totalUpdates;
@@ -98,6 +124,19 @@ private:
     void updatePerformanceMetrics(double updateTimeMicros);
     void addLogMessage(const QString& message);
     void updateStatusBar(const QString& message);
+    //void initializeCharts();
+    std::shared_ptr<ChartManager> getChartManagerForSymbol(const QString& symbol);
+	void subscribeToSymbol(const QString& symbol);
+	void unsubscribeFromSymbol(const QString& symbol);
+    void onDataSourceChanged(DataSourceMode newMode);
+
+	// Helper function to normalize symbol names
+    QString normalizeSymbol(const QString& symbol) {
+        QString sym = symbol.toUpper();
+        sym.remove('/');
+        return sym;
+    }
+
 };
 
 #endif // LIGHTNINGTRADEMAINWINDOW_H

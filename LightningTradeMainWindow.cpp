@@ -11,6 +11,9 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QTimer>
+#include <memory>
+#include <QJsonArray>
+#include <QMap>
 #include <chrono>
 
 // Constructor
@@ -23,9 +26,14 @@ LightningTradeMainWindow::LightningTradeMainWindow(QWidget* parent)
     totalUpdateTime(0.0)
 {
     setupUI();
+    previousSymbol = symbolSelector->currentText();
+
     initializeComponents();
     connectSignals();
     updateStatusBar("Ready - Lightning Trade Research App");
+    startWebSocket();
+    
+
 }
 
 // Destructor
@@ -33,6 +41,46 @@ LightningTradeMainWindow::~LightningTradeMainWindow() {
     delete generator;
     delete chartManager;
 }
+
+void LightningTradeMainWindow::switchDataSource(DataSourceMode mode) {
+    if (currentDataSource == mode)
+        return;
+
+    currentDataSource = mode;
+    realTimeTimer->stop();  // Stop all previous data flow
+
+    if (mode == DataSourceMode::MockData) {
+        addLogMessage("Switched to Mock Data Generator");
+        updateStatusBar("Data Source: Mock Data");
+
+        // Set up mock generator
+        QString symbol = symbolSelector->currentText();
+        generator->setSymbol(symbol);
+
+        // Update the current chart manager pointer
+        chartManager = getChartManagerForSymbol(symbol).get();
+
+        realTimeTimer->start(updateIntervalSpinBox->value());
+        websocketClient->disconnectFromServer();
+    }
+    else if (mode == DataSourceMode::LiveFeed) {
+        addLogMessage("Switched to Live Feed (Kraken WebSocket)");
+        updateStatusBar("Data Source: Live Feed");
+
+        realTimeTimer->stop(); // stop mock
+
+        // Clear all existing charts
+        chartManager->clearChart();
+
+        // Update the current chart manager pointer
+        chartManager = getChartManagerForSymbol(currentSymbol).get();
+
+        // Start WebSocket for live feed
+        startWebSocket();
+    }
+}
+
+
 
 // UI Setup Methods
 void LightningTradeMainWindow::setupUI() {
@@ -49,6 +97,7 @@ void LightningTradeMainWindow::setupUI() {
     setupDataDisplay();
     setupLogDisplay();
     setupChartDisplay();
+	//initializeCharts();
 
     // Add widgets to splitters
     mainSplitter->addWidget(chartGroup);      // Chart takes left side
@@ -64,6 +113,9 @@ void LightningTradeMainWindow::setupUI() {
 
     // Main layout
     QVBoxLayout* mainLayout = new QVBoxLayout(centralWidget);
+   
+    mainLayout->addWidget(dataSourceSelector);
+
     mainLayout->addWidget(mainSplitter);
 
     // Window properties
@@ -78,11 +130,16 @@ void LightningTradeMainWindow::setupControlPanel() {
     controlGroup = new QGroupBox("Control Panel");
     QGridLayout* controlLayout = new QGridLayout(controlGroup);
 
+
     // Symbol selection
-    controlLayout->addWidget(new QLabel("Symbol:"), 0, 0);
-    symbolSelector = new QComboBox();
-    symbolSelector->addItems({ "BTCUSD", "ETHUSD", "AAPL", "MSFT", "GOOGL" });
-    controlLayout->addWidget(symbolSelector, 0, 1);
+    
+   controlLayout->addWidget(new QLabel("Symbol:"), 0, 0);
+   symbolSelector = new QComboBox(this);
+   symbolSelector->addItem("BTCUSD");
+   symbolSelector->addItem("ETHUSD");
+   connect(symbolSelector, &QComboBox::currentTextChanged,
+       this, &LightningTradeMainWindow::onSymbolChanged);
+   controlLayout->addWidget(symbolSelector, 0, 1);
 
     // Update interval
     controlLayout->addWidget(new QLabel("Update Interval (ms):"), 1, 0);
@@ -108,6 +165,12 @@ void LightningTradeMainWindow::setupControlPanel() {
     performanceLoggingCheckBox = new QCheckBox("Performance Logging");
     performanceLoggingCheckBox->setChecked(true);
     controlLayout->addWidget(performanceLoggingCheckBox, 4, 0, 1, 2);
+
+    //Toggle between Live and Mock Data
+    controlLayout->addWidget(new QLabel("Data Source:"), 5, 0);
+    dataSourceSelector = new QComboBox();
+    dataSourceSelector->addItems({ "Mock Data", "Live Feed" });
+    controlLayout->addWidget(dataSourceSelector, 5, 1);
 
     // Control buttons
     startRealtimeButton = new QPushButton("Start Real-time Feed");
@@ -163,8 +226,12 @@ void LightningTradeMainWindow::setupLogDisplay() {
 
 void LightningTradeMainWindow::setupChartDisplay() {
     chartGroup = new QGroupBox("Price Chart");
-    QVBoxLayout* chartLayout = new QVBoxLayout(chartGroup);
-    // ChartManager will add chart view here in initializeComponents()
+    QVBoxLayout* layout = new QVBoxLayout(chartGroup);
+
+    chartStack = new QStackedWidget(chartGroup);
+    layout->addWidget(chartStack);
+
+    chartGroup->setLayout(layout);
 }
 
 void LightningTradeMainWindow::initializeComponents() {
@@ -181,18 +248,15 @@ void LightningTradeMainWindow::initializeComponents() {
 
     connect(websocketClient, &WebSocketClient::connected, this, &LightningTradeMainWindow::onWebSocketConnected);
     connect(websocketClient, &WebSocketClient::disconnected, this, &LightningTradeMainWindow::onWebSocketDisconnected);
-    connect(websocketClient, &WebSocketClient::messageReceived, this, &LightningTradeMainWindow::handleWebSocketMessage);
     connect(websocketClient, &WebSocketClient::errorOccurred, this, &LightningTradeMainWindow::onWebSocketError);
+    connect(websocketClient, &WebSocketClient::messageReceived, this, &LightningTradeMainWindow::handleWebSocketMessage);
 
-
-
-    // Add chart view to chart group
-    QVBoxLayout* chartLayout = qobject_cast<QVBoxLayout*>(chartGroup->layout());
-    if (chartLayout) {
-        chartLayout->addWidget(chartManager->getChartView());
-    }
 
     // Set initial values
+    // Set initial symbol to show
+    currentSymbol = symbolSelector->currentText();
+    auto initialChartManager = getChartManagerForSymbol(currentSymbol);
+    chartStack->setCurrentWidget(initialChartManager->getChartView());
     chartManager->setMaxDataPoints(maxDataPointsSpinBox->value());
     chartManager->setDarkTheme(darkThemeCheckBox->isChecked());
 
@@ -214,6 +278,14 @@ void LightningTradeMainWindow::connectSignals() {
     connect(darkThemeCheckBox, &QCheckBox::toggled, this, &LightningTradeMainWindow::onThemeChanged);
 
     connect(realTimeTimer, &QTimer::timeout, this, &LightningTradeMainWindow::generateRealtimeUpdate);
+    connect(dataSourceSelector, QOverload<int>::of(&QComboBox::currentIndexChanged),
+        this, [this](int index) {
+            if (index == 0)
+                switchDataSource(DataSourceMode::MockData);
+            else if (index == 1)
+                switchDataSource(DataSourceMode::LiveFeed);
+        });
+
 }
 
 // Slot implementations
@@ -243,7 +315,7 @@ void LightningTradeMainWindow::generateBatchData() {
     QString currentSymbol = symbolSelector->currentText();
 
     for (int i = 0; i < 20; ++i) {
-        MarketTick tick = generator->generateTick(currentSymbol.toStdString());
+        MarketTick tick = generator->generateTick(currentSymbol);
         tick.timestamp = QDateTime::currentDateTime().addSecs(-20 + i).toMSecsSinceEpoch();
 
         chartManager->addDataPoint(tick.bid, tick.timestamp);
@@ -269,13 +341,16 @@ void LightningTradeMainWindow::clearChart() {
 }
 
 void LightningTradeMainWindow::generateRealtimeUpdate() {
+    if (currentDataSource != DataSourceMode::MockData)
+        return; // only generate mock ticks in MockData mode
+
     auto startTime = std::chrono::high_resolution_clock::now();
 
     QString currentSymbol = symbolSelector->currentText();
 
-    MarketTick tick = generator->generateTick(currentSymbol.toStdString());
+    MarketTick tick = generator->generateTick(currentSymbol);
 
-    chartManager->addDataPoint(tick.bid, tick.timestamp);
+    chartManager->addMarketTick(tick);
     updateDataDisplay(tick);
 
     auto endTime = std::chrono::high_resolution_clock::now();
@@ -286,13 +361,36 @@ void LightningTradeMainWindow::generateRealtimeUpdate() {
     }
 }
 
+
 void LightningTradeMainWindow::onSymbolChanged(const QString& symbol) {
-    generator->setSymbol(symbol.toStdString());
+    QString newSymbol = symbol.toUpper();
+    if (currentSymbol == newSymbol)
+        return;
+
+    currentSymbol = newSymbol;
+
+    // Ensure ChartManager exists for symbol
+    auto newChartManager = getChartManagerForSymbol(symbol);
+
+    // Update the member pointer to the new chart manager
+    chartManager = newChartManager.get();
+
+    // Switch stacked widget to show this symbol's chart
+    chartStack->setCurrentWidget(chartManager->getChartView());
+
+    // Optionally clear chart when switching symbol
     chartManager->clearChart();
 
     updateStatusBar(QString("Symbol changed to %1").arg(symbol));
     addLogMessage(QString("Switched to symbol: %1").arg(symbol));
+
+    if (currentDataSource == DataSourceMode::LiveFeed && websocketClient->isConnected()) {
+        subscribeToSymbol(currentSymbol);  // ?? Re-subscribe on symbol change
+    }
 }
+
+
+
 
 void LightningTradeMainWindow::onUpdateIntervalChanged(int interval) {
     if (realTimeTimer->isActive()) {
@@ -311,33 +409,69 @@ void LightningTradeMainWindow::onThemeChanged(bool darkTheme) {
     addLogMessage(QString("Theme changed to %1").arg(darkTheme ? "Dark" : "Light"));
 }
 
-void LightningTradeMainWindow::handleWebSocketMessage(const QString& message){
-    QJsonParseError parseError;
-    QJsonDocument doc = QJsonDocument::fromJson(message.toUtf8(), &parseError);
-    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
-        addLogMessage("Failed to parse WebSocket JSON message");
+void LightningTradeMainWindow::handleWebSocketMessage(const QString& message) {
+    if (currentDataSource != DataSourceMode::LiveFeed)
         return;
+
+    QJsonDocument doc = QJsonDocument::fromJson(message.toUtf8());
+
+    if (doc.isObject()) {
+        QString eventType = doc.object().value("event").toString();
+        if (eventType == "heartbeat") return;
+        addLogMessage("Event: " + eventType);
     }
+    else if (doc.isArray()) {
+        QJsonArray arr = doc.array();
+        if (arr.size() >= 4) {
+            QString krakenPair = arr.at(3).toString(); // e.g., XBT/USD
+            QString normalizedPair = normalizeSymbol(krakenPair);
+            normalizedPair = normalizedPair.remove("/").toUpper();
+            // ? XBTUSD
 
-    QJsonObject obj = doc.object();
+            if (!chartManagers.contains(normalizedPair)) {
+                // Create and store ChartManager for this symbol
+                auto newChartManager = std::make_unique<ChartManager>(this);
 
-    QString symbol = obj.value("s").toString();
-    double price = obj.value("p").toString().toDouble();
-    double quantity = obj.value("q").toString().toDouble();
-    qint64 tradeTime = obj.value("T").toVariant().toLongLong();
+                // Apply config settings (optional but recommended)
+                newChartManager->setMaxDataPoints(maxDataPointsSpinBox->value());
+                newChartManager->setDarkTheme(darkThemeCheckBox->isChecked());
 
-    if (symbol.isEmpty() || price == 0.0) {
-        addLogMessage("Invalid trade data received");
-        return;
+                // Add to chart stack
+                chartStack->addWidget(newChartManager->getChartView());
+
+                // Store it
+                chartManagers[normalizedPair] = std::move(newChartManager);
+
+                addLogMessage(QString("Created chart for %1").arg(normalizedPair));
+            }
+
+
+            auto chart = chartManagers[normalizedPair].get();
+            QJsonArray trades = arr.at(1).toArray();
+
+            for (const auto& tradeVal : trades) {
+                QJsonArray trade = tradeVal.toArray();
+
+                bool priceOk = false;
+                double price = trade.at(0).toString().toDouble(&priceOk);
+                if (!priceOk) continue;
+
+                bool tsOk = false;
+                double timestamp = trade.at(2).toString().toDouble(&tsOk);
+                if (!tsOk) continue;
+
+                qint64 ts = static_cast<qint64>(timestamp * 1000);
+
+                chart->addPricePoint(price, ts);
+
+            }
+        }
     }
-
-    MarketTick tick(symbol.toStdString(), price, static_cast<int>(quantity), tradeTime, price, price, price, price, price);
-
-    chartManager->addDataPoint(tick.price, tick.timestamp);
-    updateDataDisplay(tick);
-
-    addLogMessage(QString("Trade: %1 Price: %2 Quantity: %3").arg(symbol).arg(price).arg(quantity));
 }
+
+
+
+
 
 void LightningTradeMainWindow::onWebSocketDisconnected(){
     addLogMessage("WebSocket disconnected.");
@@ -348,16 +482,23 @@ void LightningTradeMainWindow::onWebSocketError(const QString& errorString) {
     qWarning() << "WebSocket error received in MainWindow:" << errorString;
 }
 
-void LightningTradeMainWindow::startWebSocket(){
-    QUrl url("wss://stream.binance.com:9443/ws/btcusdt@trade");
+void LightningTradeMainWindow::startWebSocket() {
+    QUrl url("wss://ws.kraken.com/");
     websocketClient->connectToServer(url);
-    addLogMessage("Connecting to Binance WebSocket via custom client...");
+    addLogMessage("Connecting to Kraken WebSocket via custom client...");
 }
 
-void LightningTradeMainWindow::onWebSocketConnected(){
+void LightningTradeMainWindow::onWebSocketConnected() {
+    qDebug() << "WebSocket connected to Kraken";
+
     addLogMessage("WebSocket connected.");
-    updateStatusBar("WebSocket connection established.");
+
+    subscribeToSymbol(currentSymbol);
+    previousSymbol = currentSymbol;
 }
+
+
+
 
 void LightningTradeMainWindow::updateDataDisplay(const MarketTick& tick) {
     currentPriceLabel->setText(QString("Price: $%1").arg(tick.price, 0, 'f', 2));
@@ -405,3 +546,129 @@ void LightningTradeMainWindow::addLogMessage(const QString& message) {
 void LightningTradeMainWindow::updateStatusBar(const QString& message) {
     statusBar()->showMessage(message, 3000);
 }
+
+std::shared_ptr<ChartManager> LightningTradeMainWindow::getChartManagerForSymbol(const QString& symbol) {
+    QString normalizedSymbol = normalizeSymbol(symbol);
+
+    if (!chartManagers.contains(normalizedSymbol)) {
+        auto newManager = std::make_shared<ChartManager>(this);
+        newManager->setSymbol(normalizedSymbol);
+        chartManagers[normalizedSymbol] = newManager;
+
+        chartStack->addWidget(newManager->getChartView());
+    }
+
+    // Switch to this chart
+    chartStack->setCurrentWidget(chartManagers[normalizedSymbol]->getChartView());
+
+    return chartManagers[normalizedSymbol];
+}
+
+
+
+void LightningTradeMainWindow::subscribeToSymbol(const QString& symbol) {
+    if (!websocketClient || !websocketClient->isConnected())
+        return;
+
+    if (!previousSymbol.isEmpty() && previousSymbol != symbol) {
+        // Unsubscribe previous symbol
+        QString prevFormatted = previousSymbol;
+        prevFormatted.insert(3, "/");
+
+        QJsonObject unsubscribeMsg{
+            {"event", "unsubscribe"},
+            {"pair", QJsonArray{prevFormatted}},
+            {"subscription", QJsonObject{{"name", "trade"}}}
+        };
+        websocketClient->sendMessage(QJsonDocument(unsubscribeMsg).toJson(QJsonDocument::Compact));
+    }
+
+    QString formattedSymbol = normalizeSymbol(currentSymbol);
+    formattedSymbol.insert(3, "/"); // XBTUSD ? XBT/USD
+
+    QJsonObject subscribeMsg{
+        {"event", "subscribe"},
+        {"pair", QJsonArray{formattedSymbol}},
+        {"subscription", QJsonObject{{"name", "trade"}}}
+    };
+
+    websocketClient->sendMessage(QJsonDocument(subscribeMsg).toJson(QJsonDocument::Compact));
+    addLogMessage(QString("Subscribed to %1").arg(formattedSymbol));
+    previousSymbol = symbol;
+}
+
+
+void LightningTradeMainWindow::unsubscribeFromSymbol(const QString& symbol) {
+    QString pairToUnsubscribe = symbol;
+    if (pairToUnsubscribe.length() > 3)
+        pairToUnsubscribe.insert(3, "/"); // e.g. "XBTUSD" ? "XBT/USD"
+
+    QJsonObject unsubscribeMessage{
+        {"event", "unsubscribe"},
+        {"pair", QJsonArray{pairToUnsubscribe}},
+        {"subscription", QJsonObject{{"name", "trade"}}}
+    };
+    QJsonDocument doc(unsubscribeMessage);
+    websocketClient->sendMessage(doc.toJson(QJsonDocument::Compact));
+    addLogMessage(QString("Unsubscribed from live feed for %1").arg(pairToUnsubscribe));
+}
+
+void LightningTradeMainWindow::onDataSourceChanged(DataSourceMode newMode) {
+    currentDataSource = newMode;
+
+    // Clear all chart views from chartStack
+    while (chartStack->count() > 0) {
+        QWidget* widget = chartStack->widget(0);
+        chartStack->removeWidget(widget);
+        widget->deleteLater();
+    }
+
+    // Clear all chart managers
+    chartManagers.clear();
+
+    if (currentDataSource == DataSourceMode::MockData) {
+        chartManager = new ChartManager(this);
+        chartManager->setMaxDataPoints(maxDataPointsSpinBox->value());
+        chartManager->setDarkTheme(darkThemeCheckBox->isChecked());
+
+        chartStack->addWidget(chartManager->getChartView());
+
+        connect(generator, &MockDataGenerator::priceUpdated,
+            this, [=](const MarketTick& tick) {
+                chartManager->addPricePoint(tick.price, tick.timestamp);
+            });
+
+
+        generator->start(currentSymbol);
+
+        chartStack->setCurrentWidget(chartManager->getChartView());
+    }
+    else if (currentDataSource == DataSourceMode::LiveFeed) {
+        if (websocketClient && !websocketClient->isConnected()) {
+            websocketClient->connectToServer(currentSymbol);
+        }
+
+        subscribeToSymbol(currentSymbol);
+    }
+
+    addLogMessage(QString("Data source changed to %1")
+        .arg(currentDataSource == DataSourceMode::MockData ? "Mock Data" : "Live Feed"));
+}
+
+
+
+//void LightningTradeMainWindow::initializeCharts() {
+//    QStringList pairs = { "XBT/USD", "ETH/USD" };
+//
+//    QVBoxLayout* chartLayout = qobject_cast<QVBoxLayout*>(chartGroup->layout());
+//    if (!chartLayout) return;  // Safety check
+//
+//    for (const QString& pair : pairs) {
+//        auto chartManager = std::make_shared<ChartManager>(this);
+//        chartManager->setSymbol(pair);
+//
+//        chartManagers.insert(pair, chartManager);
+//        chartLayout->addWidget(chartManager->getChartView());
+//    }
+//}
+

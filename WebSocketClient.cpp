@@ -24,8 +24,16 @@ void WebSocketClient::disconnectFromServer() {
     m_webSocket.close();
 }
 
+void WebSocketClient::sendMessage(const QString& message){
+    m_webSocket.sendTextMessage(message);
+}
+
+bool WebSocketClient::isConnected() const{
+    return m_webSocket.state() == QAbstractSocket::ConnectedState;
+}
+
 void WebSocketClient::onConnected() {
-    qDebug() << "WebSocket connected";
+    
     emit connected();
 }
 
@@ -35,6 +43,7 @@ void WebSocketClient::onDisconnected() {
 }
 
 void WebSocketClient::onTextMessageReceived(const QString& message) {
+	qDebug() << "WebSocket message received:" << message;
     emit messageReceived(message);
 }
 

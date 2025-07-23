@@ -13,6 +13,8 @@ public:
     void connectToServer(const QUrl& url);
     void disconnectFromServer();
 	QString errorString() const { return m_webSocket.errorString(); }
+    void sendMessage(const QString& message);
+    bool isConnected() const;
 
 signals:
     void messageReceived(const QString& message);
